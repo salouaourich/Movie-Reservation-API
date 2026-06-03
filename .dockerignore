@@ -1,0 +1,42 @@
+# The root Dockerfile builds only the Phase-2 backend.
+# Everything in this list is excluded from the build context to keep images small.
+
+# Other phases (docs / design / deployment configs / overlays)
+Phase-1/
+Phase-3/
+Phase-4/
+
+# Frontend lives in Phase-2/frontend — it is NOT part of the API container.
+Phase-2/frontend/
+
+# Python build artefacts
+**/__pycache__/
+**/*.py[cod]
+**/*.egg-info/
+**/.venv/
+**/venv/
+**/env/
+**/.pytest_cache/
+**/.mypy_cache/
+
+# Node
+**/node_modules/
+**/dist/
+**/.vite/
+
+# IDE / OS junk
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Local env files (Render injects real env vars)
+.env
+.env.*
+
+# Git
+.git/
+.gitignore
+
+# Windows reserved-name artefact
+**/nul
