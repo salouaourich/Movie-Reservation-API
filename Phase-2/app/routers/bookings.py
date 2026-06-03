@@ -79,6 +79,33 @@ async def create_booking(
                        f"You do not hold seats {missing} (or the hold expired).",
                        {"seat_ids": missing})
 
+    # Clean up any stale pending_payment bookings the SAME user has for this
+    # showing. Without this, a user who clicks "Proceed to payment" twice
+    # would hit the unique-seat constraint on their own previous attempt.
+    stale_stmt = (
+        select(Booking)
+        .options(selectinload(Booking.seats))
+        .where(
+            Booking.user_id == user.id,
+            Booking.showing_id == showing.id,
+            Booking.status == "pending_payment",
+        )
+    )
+    stale = (await db.execute(stale_stmt)).scalars().all()
+    for old in stale:
+        # Cancel the old Stripe PaymentIntent so it doesn't keep charging.
+        if old.payment_intent_id:
+            try:
+                stripe.PaymentIntent.cancel(old.payment_intent_id)
+            except Exception:
+                pass
+        for bs in list(old.seats):
+            await db.delete(bs)
+        old.status = "cancelled"
+        old.cancelled_at = datetime.utcnow()
+    if stale:
+        await db.flush()
+
     # Compute final prices using the CURRENT occupancy.
     total_seats = (await db.execute(
         select(func.count()).select_from(Seat).where(Seat.hall_id == showing.hall_id)
