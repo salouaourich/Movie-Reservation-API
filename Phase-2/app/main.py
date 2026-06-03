@@ -16,17 +16,44 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import selectinload
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import API_PREFIX
-from app.database import AsyncSessionLocal
+from app.database import AsyncSessionLocal, engine
 from app.models import Booking, BookingSeat
 from app.routers import auth, movies, halls, showings, bookings
 from app.routers import payments
 
 log = logging.getLogger(__name__)
+
+
+# ── One-time schema migration: add payment columns if missing ────────────────
+
+async def _ensure_payment_columns() -> None:
+    """
+    Idempotent: adds payment_intent_id and payment_expires_at columns to the
+    bookings table if they don't already exist. Lets us add Stripe support
+    without forcing a manual DB migration.
+    """
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS "
+                "payment_intent_id VARCHAR(100)"
+            ))
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_bookings_payment_intent_id "
+                "ON bookings (payment_intent_id)"
+            ))
+            await conn.execute(text(
+                "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS "
+                "payment_expires_at TIMESTAMP"
+            ))
+        log.info("Payment columns ensured on bookings table.")
+    except Exception:
+        log.exception("Failed to ensure payment columns")
 
 
 # ── Background task: expire unpaid bookings every 60 s ───────────────────────
@@ -65,6 +92,7 @@ async def _cleanup_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await _ensure_payment_columns()
     task = asyncio.create_task(_cleanup_loop())
     yield
     task.cancel()
