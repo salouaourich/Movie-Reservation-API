@@ -82,10 +82,12 @@ app = FastAPI(
 )
 
 # Allow the React frontend to call us cross-origin.
+# Note: allow_credentials must be False when allow_origins=["*"] — the CORS spec
+# forbids the combination. We use Bearer tokens (not cookies) so credentials=False is correct.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
