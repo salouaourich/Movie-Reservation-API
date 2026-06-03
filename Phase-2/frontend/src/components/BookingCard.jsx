@@ -1,6 +1,20 @@
 export default function BookingCard({ booking, onCancel }) {
-  const isCancelled = booking.status === 'cancelled';
+  const isCancelled  = booking.status === 'cancelled';
+  const isPending    = booking.status === 'pending_payment';
   const startsInPast = new Date(booking.start_time) <= new Date();
+
+  // Always allow cancelling a pending_payment booking (the user hasn't paid
+  // yet — they shouldn't be stuck with it just because the showing time has
+  // passed in the seed data). For confirmed bookings, keep the original rule
+  // (can't cancel once the showing started).
+  const canCancel = !isCancelled && (isPending || !startsInPast);
+
+  // Style the status badge by state.
+  const statusColor = isCancelled
+    ? '#888'
+    : isPending
+      ? '#f9a825'   // amber for pending
+      : '#2a9d4e';  // green for confirmed
 
   return (
     <div className="card" style={{ marginBottom: 16 }}>
@@ -16,14 +30,20 @@ export default function BookingCard({ booking, onCancel }) {
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: 20, fontWeight: 700 }}>${booking.total_price}</div>
-          <div className="muted">Status: {booking.status}</div>
-          {!isCancelled && !startsInPast && (
+          <div style={{ color: statusColor, fontWeight: 600, fontSize: 13, marginTop: 2 }}>
+            {isPending
+              ? '⏳ Awaiting payment'
+              : isCancelled
+                ? '✗ Cancelled'
+                : '✓ Confirmed'}
+          </div>
+          {canCancel && (
             <button
               className="secondary"
               style={{ marginTop: 8 }}
               onClick={() => onCancel(booking.id)}
             >
-              Cancel
+              {isPending ? 'Cancel booking' : 'Cancel'}
             </button>
           )}
         </div>

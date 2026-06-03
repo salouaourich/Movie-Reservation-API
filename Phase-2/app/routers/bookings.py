@@ -286,10 +286,20 @@ async def cancel_booking(
         # Idempotent — return current state.
         return BookingCancelResponse(id=booking.id, status="cancelled", cancelled_at=booking.cancelled_at or datetime.utcnow())
 
-    # Refuse to cancel a showing that has already started.
-    showing = await db.get(Showing, booking.showing_id)
-    if showing and showing.start_time <= datetime.utcnow():
-        raise APIError(409, "SHOWING_STARTED", "Cannot cancel — the showing has already started.")
+    # Pending-payment bookings can ALWAYS be cancelled — the user hasn't paid
+    # yet. For confirmed bookings, refuse if the showing has already started.
+    if booking.status != "pending_payment":
+        showing = await db.get(Showing, booking.showing_id)
+        if showing and showing.start_time <= datetime.utcnow():
+            raise APIError(409, "SHOWING_STARTED", "Cannot cancel — the showing has already started.")
+
+    # If a pending booking has a Stripe PaymentIntent, cancel it so the user
+    # can never be charged for an abandoned booking.
+    if booking.payment_intent_id:
+        try:
+            stripe.PaymentIntent.cancel(booking.payment_intent_id)
+        except Exception:
+            pass  # already cancelled / charged / unknown — don't block the DB update
 
     booking.status = "cancelled"
     booking.cancelled_at = datetime.utcnow()
