@@ -1,0 +1,70 @@
+# Render Blueprint — single source of truth for both services on Render.
+#
+# Render automatically picks up a render.yaml at the repository ROOT and uses
+# it to configure (or reconfigure) every blueprint-managed service.
+#
+# Services declared:
+#   1. cinema-api      (Web Service, Docker) — FastAPI backend
+#   2. cinema-frontend (Static Site)         — Vite/React SPA
+#
+# Postgres and Redis are NOT declared here. They are managed separately
+# (Render Postgres + Upstash Redis). Connection URLs are injected via env vars.
+
+services:
+  # ─────────────────── FastAPI backend ─────────────────────────────────
+  - type: web
+    name: cinema-api
+    runtime: docker
+    plan: free
+    # Root Dockerfile (added in the previous commit) builds the Phase-2 backend.
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /docs
+    envVars:
+      - key: APP_ENV
+        value: prod
+      - key: DATABASE_URL
+        sync: false           # set in Render dashboard to postgresql+asyncpg://...
+      - key: REDIS_URL
+        sync: false           # set in Render dashboard to the Upstash rediss:// URL
+      - key: SECRET_KEY
+        generateValue: true
+      - key: JWT_ISSUER
+        value: movie-reservation-api
+      - key: JWT_AUDIENCE
+        value: movie-reservation-clients
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "60"
+      - key: HOLD_TTL_SECONDS
+        value: "300"
+      - key: CORS_ORIGINS
+        sync: false           # set to the deployed frontend URL
+
+  # ─────────────────── Vite/React static frontend ──────────────────────
+  - type: web
+    name: cinema-frontend
+    runtime: static
+    plan: free
+    # IMPORTANT: rootDir must point at the actual frontend folder.
+    # The earlier "Root directory 'frontend' does not exist" error happened
+    # because Render had this set to "frontend" instead of "Phase-2/frontend".
+    rootDir: Phase-2/frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    envVars:
+      - key: VITE_API_BASE
+        sync: false           # set to https://<your-api>.onrender.com/api after first deploy
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: no-referrer
