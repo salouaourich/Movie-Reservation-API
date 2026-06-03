@@ -38,11 +38,23 @@ function CheckoutForm({ total, ticketCode, expiresAt, onSuccess, onCancel }) {
   // Countdown timer
   useEffect(() => {
     if (!expiresAt) return;
-    const end = new Date(expiresAt).getTime();
+    // Backend returns naive UTC datetime ("2026-06-03T20:30:00") with no timezone
+    // suffix — JS would otherwise parse it as LOCAL time and the timer would
+    // start at 0 in any timezone ahead of UTC. Force UTC by appending 'Z'.
+    const hasTz = /Z$|[+-]\d{2}:?\d{2}$/.test(expiresAt);
+    const end = new Date(hasTz ? expiresAt : expiresAt + 'Z').getTime();
+
+    // Grace period: never auto-cancel within the first 5 seconds — that gives
+    // a backwards-clock client time to catch up rather than instant-killing
+    // the form on mount.
+    const mountedAt = Date.now();
+
     function tick() {
       const diff = Math.max(0, Math.floor((end - Date.now()) / 1000));
       setSecondsLeft(diff);
-      if (diff === 0) onCancel();  // auto-cancel when expired
+      if (diff === 0 && Date.now() - mountedAt > 5000) {
+        onCancel();
+      }
     }
     tick();
     const id = setInterval(tick, 1000);
