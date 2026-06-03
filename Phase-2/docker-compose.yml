@@ -1,0 +1,45 @@
+services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: cinema_db
+      POSTGRES_USER: cinema_user
+      POSTGRES_PASSWORD: cinema_pass
+    ports:
+      # Host port 5433 -> container port 5432 (host 5432 is taken by another Postgres).
+      # The API container still talks to db on 5432 over the internal docker network.
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cinema_user -d cinema_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  api:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cinema_user:cinema_pass@db:5432/cinema_db
+      REDIS_URL: redis://redis:6379
+      SECRET_KEY: changeme
+      ACCESS_TOKEN_EXPIRE_MINUTES: "60"
+      HOLD_TTL_SECONDS: "300"
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+volumes:
+  pgdata:

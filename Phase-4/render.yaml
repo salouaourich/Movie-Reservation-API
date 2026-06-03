@@ -1,0 +1,84 @@
+# Render Blueprint for the Movie Reservation System.
+#
+# Three Render-managed resources are declared here:
+#   1. cinema-api          (Web Service, Docker)        - FastAPI backend
+#   2. cinema-frontend     (Static Site)                 - Vite/React SPA
+#   3. cinema-db           (Postgres, free 90-day plan)  - the relational store
+#
+# Redis is NOT declared here on purpose: Render removed its free Redis tier.
+# We use Upstash Redis (free 10K req/day) instead and inject REDIS_URL as a
+# secret env var. See DEPLOYMENT.md for the Upstash setup.
+#
+# How to deploy:
+#   1. Push this repo to GitHub.
+#   2. In Render: New + > Blueprint > pick this repo > select Phase-4 branch.
+#   3. Render parses this file and creates the three services automatically.
+#   4. Set the manual env vars in the dashboard (SECRET_KEY, REDIS_URL, ...).
+#   5. Run the seed once (Shell tab on the api service): python seed.py
+
+databases:
+  - name: cinema-db
+    plan: free
+    databaseName: cinema_db
+    user: cinema_user
+
+services:
+  # ---- FastAPI backend ----
+  - type: web
+    name: cinema-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Phase-4/Dockerfile
+    dockerContext: ./Phase-4
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: prod
+      - key: DATABASE_URL
+        fromDatabase:
+          name: cinema-db
+          property: connectionString
+      # Render's DATABASE_URL is `postgresql://...` — we need `postgresql+asyncpg://...`.
+      # Easiest approach: set DATABASE_URL manually in the dashboard to the asyncpg form,
+      # or rewrite inside app/config.py. Leaving the fromDatabase wiring here as a fallback.
+      - key: REDIS_URL
+        sync: false           # set manually to your Upstash URL (rediss://...)
+      - key: SECRET_KEY
+        generateValue: true   # Render creates a strong random value on first deploy
+      - key: JWT_ISSUER
+        value: movie-reservation-api
+      - key: JWT_AUDIENCE
+        value: movie-reservation-clients
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "60"
+      - key: HOLD_TTL_SECONDS
+        value: "300"
+      - key: RATE_LIMIT_ENABLED
+        value: "true"
+      - key: CORS_ORIGINS
+        sync: false           # set to the frontend URL after first deploy
+
+  # ---- Static frontend (Vite build, served by Render's CDN) ----
+  - type: web
+    name: cinema-frontend
+    runtime: static
+    plan: free
+    buildCommand: cd Phase-2/frontend && npm ci && npm run build
+    staticPublishPath: ./Phase-2/frontend/dist
+    envVars:
+      - key: VITE_API_BASE
+        sync: false           # set to https://cinema-api.onrender.com/api after first deploy
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: no-referrer
