@@ -9,21 +9,24 @@ GET  /bookings/{id}/ticket         e-ticket details
 """
 
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
+import stripe
 from fastapi import APIRouter, Depends, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.exc import IntegrityError
 
+from app.config import STRIPE_SECRET_KEY, PAYMENT_EXPIRE_MINUTES
 from app.database import get_db
 from app.errors import APIError
 from app.models import Booking, BookingSeat, Seat, Showing, Hall, Movie
 from app.schemas import (
     BookingCreate,
     BookingPublic,
+    BookingPendingResponse,
     BookingSeatPublic,
     BookingList,
     BookingListItem,
@@ -37,6 +40,8 @@ from app.security import get_current_user, require_customer
 from app.services.pricing import calculate_seat_price, pricing_tier
 from app.services.holds import user_owns_holds, release_holds
 
+stripe.api_key = STRIPE_SECRET_KEY
+
 router = APIRouter(prefix="/bookings", tags=["bookings"])
 
 
@@ -48,12 +53,18 @@ def _generate_ticket_code() -> str:
     return f"TKT-{part1}-{part2}"
 
 
-@router.post("", response_model=BookingPublic, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=BookingPendingResponse, status_code=status.HTTP_201_CREATED)
 async def create_booking(
     payload: BookingCreate,
     db: AsyncSession = Depends(get_db),
     user=Depends(require_customer),
 ):
+    """
+    Creates a booking in 'pending_payment' state and returns a Stripe
+    PaymentIntent client_secret. The frontend must complete payment using
+    Stripe.js; the webhook at POST /payments/webhook then confirms the booking.
+    Unpaid bookings are automatically cancelled after PAYMENT_EXPIRE_MINUTES.
+    """
     if not payload.seat_ids:
         raise APIError(400, "EMPTY_LIST", "seat_ids must not be empty.")
 
@@ -68,7 +79,7 @@ async def create_booking(
                        f"You do not hold seats {missing} (or the hold expired).",
                        {"seat_ids": missing})
 
-    # Compute final prices using the CURRENT occupancy (matches what the user saw on the seat map).
+    # Compute final prices using the CURRENT occupancy.
     total_seats = (await db.execute(
         select(func.count()).select_from(Seat).where(Seat.hall_id == showing.hall_id)
     )).scalar_one()
@@ -83,30 +94,57 @@ async def create_booking(
     seats = (await db.execute(select(Seat).where(Seat.id.in_(payload.seat_ids)))).scalars().all()
     seat_by_id = {s.id: s for s in seats}
 
-    booking = Booking(
-        user_id=user.id,
-        showing_id=showing.id,
-        status="confirmed",
-        ticket_code=_generate_ticket_code(),
-        total_price=Decimal("0.00"),  # set below after summing seats
-    )
-    db.add(booking)
-    await db.flush()  # need booking.id
-
+    # Calculate total price first (needed for Stripe PaymentIntent).
     total = Decimal("0.00")
-    booking_seats_out: list[BookingSeatPublic] = []
+    seat_prices: dict[int, Decimal] = {}
     for sid in payload.seat_ids:
         seat = seat_by_id.get(sid)
         if not seat:
             raise APIError(400, "INVALID_SEATS", f"Seat {sid} not found.")
         price = calculate_seat_price(showing.base_price, occ_rate, seat.seat_type)
+        seat_prices[sid] = price
+        total += price
+
+    # Create Stripe PaymentIntent (amount in cents).
+    if not STRIPE_SECRET_KEY:
+        raise APIError(501, "PAYMENT_NOT_CONFIGURED",
+                       "Payment processing is not configured on this server.")
+    try:
+        intent = stripe.PaymentIntent.create(
+            amount=int(total * 100),   # USD cents
+            currency="usd",
+            metadata={
+                "user_id":    str(user.id),
+                "showing_id": str(showing.id),
+            },
+        )
+    except stripe.StripeError as e:
+        raise APIError(502, "STRIPE_ERROR", f"Payment setup failed: {e.user_message or str(e)}")
+
+    # Persist the booking (pending_payment) and seat rows.
+    expires_at = datetime.utcnow() + timedelta(minutes=PAYMENT_EXPIRE_MINUTES)
+    booking = Booking(
+        user_id=user.id,
+        showing_id=showing.id,
+        status="pending_payment",
+        ticket_code=_generate_ticket_code(),
+        total_price=total,
+        payment_intent_id=intent.id,
+        payment_expires_at=expires_at,
+    )
+    db.add(booking)
+    await db.flush()  # need booking.id
+
+    booking_seats_out: list[BookingSeatPublic] = []
+    for sid in payload.seat_ids:
+        seat = seat_by_id[sid]
+        price = seat_prices[sid]
         db.add(BookingSeat(
             booking_id=booking.id,
             showing_id=showing.id,
             seat_id=sid,
             price_at_booking=price,
         ))
-        total += price
         booking_seats_out.append(BookingSeatPublic(
             seat_id=sid,
             row_label=seat.row_label,
@@ -114,20 +152,19 @@ async def create_booking(
             price_at_booking=price,
         ))
 
-    booking.total_price = total
-
-    # If two requests race, the (showing_id, seat_id) unique constraint will catch it here.
     try:
         await db.commit()
     except IntegrityError:
         await db.rollback()
+        # Cancel the orphaned PaymentIntent so Stripe doesn't keep it open.
+        try:
+            stripe.PaymentIntent.cancel(intent.id)
+        except Exception:
+            pass
         raise APIError(409, "SEAT_UNAVAILABLE", "One or more seats were just booked by another user.")
 
-    # Release the Redis holds — the DB row is now the source of truth.
-    await release_holds(showing.id, payload.seat_ids, user.id)
-
     await db.refresh(booking)
-    return BookingPublic(
+    return BookingPendingResponse(
         id=booking.id,
         showing_id=booking.showing_id,
         user_id=booking.user_id,
@@ -135,6 +172,8 @@ async def create_booking(
         ticket_code=booking.ticket_code,
         total_price=booking.total_price,
         created_at=booking.created_at,
+        payment_expires_at=booking.payment_expires_at,
+        client_secret=intent.client_secret,
         seats=booking_seats_out,
     )
 

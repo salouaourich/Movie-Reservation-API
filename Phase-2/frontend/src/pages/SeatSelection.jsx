@@ -2,17 +2,20 @@ import { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { api, isLoggedIn } from '../api.js';
 import SeatMap from '../components/SeatMap.jsx';
+import PaymentForm from '../components/PaymentForm.jsx';
 
+// step: 'selecting' | 'paying' | 'confirmed'
 export default function SeatSelection() {
   const { showingId } = useParams();
   const navigate = useNavigate();
-  const [data, setData] = useState(null);
-  const [selected, setSelected] = useState([]);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [busy, setBusy] = useState(false);
 
-  // Load seat map (and re-load after holds/booking).
+  const [data,     setData    ] = useState(null);
+  const [selected, setSelected] = useState([]);
+  const [error,    setError   ] = useState('');
+  const [busy,     setBusy    ] = useState(false);
+  const [step,     setStep    ] = useState('selecting');   // state machine
+  const [pending,  setPending ] = useState(null);          // BookingPendingResponse
+
   function reload() {
     return api.seatMap(showingId)
       .then(setData)
@@ -20,15 +23,14 @@ export default function SeatSelection() {
   }
   useEffect(() => { reload(); /* eslint-disable-next-line */ }, [showingId]);
 
-  // Click toggles a seat in/out of selection.
   function toggle(seat) {
-    setError(''); setSuccess('');
+    if (step !== 'selecting') return;
+    setError('');
     setSelected((prev) =>
       prev.includes(seat.id) ? prev.filter((id) => id !== seat.id) : [...prev, seat.id],
     );
   }
 
-  // Sum of prices for selected seats (from the seat map response, not stored).
   const total = useMemo(() => {
     if (!data) return 0;
     return data.seats
@@ -36,22 +38,20 @@ export default function SeatSelection() {
       .reduce((sum, s) => sum + Number(s.price), 0);
   }, [data, selected]);
 
-  async function holdAndBook() {
+  // ── Step 1: hold seats then create pending booking ───────────────────────
+  async function holdAndProceed() {
     if (!isLoggedIn()) { navigate('/login'); return; }
     if (selected.length === 0) return;
-    setBusy(true); setError(''); setSuccess('');
+    setBusy(true); setError('');
+
     try {
-      // 1) Acquire holds (atomic — all-or-nothing).
       await api.holdSeats(Number(showingId), selected);
-      // 2) Confirm the booking immediately. In a real flow there'd be a
-      //    payment step between these two calls.
       const booking = await api.createBooking(Number(showingId), selected);
-      setSuccess(`Booking confirmed! Ticket code: ${booking.ticket_code}. Total: $${booking.total_price}`);
-      setSelected([]);
-      await reload();
+      // booking now contains client_secret — move to payment step
+      setPending(booking);
+      setStep('paying');
     } catch (e) {
       setError(e.message);
-      // If the booking failed, free any holds we may have grabbed.
       try { await api.releaseHolds(Number(showingId), selected); } catch { /* ignore */ }
       await reload();
     } finally {
@@ -59,8 +59,63 @@ export default function SeatSelection() {
     }
   }
 
+  // ── Step 2: payment confirmed by Stripe ─────────────────────────────────
+  function onPaymentSuccess({ ticketCode, total: paidTotal }) {
+    setStep('confirmed');
+    setSelected([]);
+    reload();
+    setPending((prev) => ({ ...prev, ticketCode, total: paidTotal }));
+  }
+
+  // ── Step 2: user cancels payment ─────────────────────────────────────────
+  async function onPaymentCancel() {
+    // Release the holds — the backend scheduler will expire the booking.
+    try { await api.releaseHolds(Number(showingId), selected); } catch { /* ignore */ }
+    setStep('selecting');
+    setPending(null);
+    setSelected([]);
+    await reload();
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────
   if (!data) return <p className="muted">Loading seat map…</p>;
 
+  // Confirmed screen
+  if (step === 'confirmed' && pending) {
+    return (
+      <div>
+        <h1 style={{ color: '#2a9d4e' }}>🎉 Booking confirmed!</h1>
+        <p>Your ticket code: <strong style={{ fontSize: 22 }}>{pending.ticket_code}</strong></p>
+        <p>Total paid: <strong>${Number(pending.total_price).toFixed(2)}</strong></p>
+        <p className="muted">A receipt has been sent to your email by Stripe.</p>
+        <div style={{ display: 'flex', gap: 12, marginTop: 20 }}>
+          <button onClick={() => navigate('/bookings/me')}>View my bookings</button>
+          <button onClick={() => { setStep('selecting'); setPending(null); }}>
+            Book more seats
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Payment screen
+  if (step === 'paying' && pending) {
+    return (
+      <div>
+        <h1>Select your seats</h1>
+        <PaymentForm
+          clientSecret={pending.client_secret}
+          total={pending.total_price}
+          ticketCode={pending.ticket_code}
+          expiresAt={pending.payment_expires_at}
+          onSuccess={onPaymentSuccess}
+          onCancel={onPaymentCancel}
+        />
+      </div>
+    );
+  }
+
+  // Seat selection screen (default)
   return (
     <div>
       <h1>Select your seats</h1>
@@ -72,7 +127,6 @@ export default function SeatSelection() {
       </div>
 
       {error && <p className="error">{error}</p>}
-      {success && <p className="success">{success}</p>}
 
       <SeatMap data={data} selectedIds={selected} onToggle={toggle} />
 
@@ -81,8 +135,8 @@ export default function SeatSelection() {
           <strong>{selected.length}</strong> seat(s) selected
         </div>
         <div style={{ fontSize: 20, fontWeight: 700 }}>${total.toFixed(2)}</div>
-        <button onClick={holdAndBook} disabled={busy || selected.length === 0}>
-          {busy ? 'Processing…' : 'Hold & Book'}
+        <button onClick={holdAndProceed} disabled={busy || selected.length === 0}>
+          {busy ? 'Processing…' : 'Proceed to payment →'}
         </button>
       </div>
     </div>

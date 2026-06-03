@@ -214,6 +214,20 @@ class BookingPublic(BaseModel):
     seats: list[BookingSeatPublic]
 
 
+class BookingPendingResponse(BaseModel):
+    """Returned immediately after POST /bookings — payment still required."""
+    id: int
+    showing_id: int
+    user_id: int
+    status: str          # always "pending_payment"
+    ticket_code: str
+    total_price: Decimal
+    created_at: datetime
+    payment_expires_at: datetime
+    client_secret: str   # Stripe PaymentIntent client secret — pass to Stripe.js
+    seats: list[BookingSeatPublic]
+
+
 class BookingListItem(BaseModel):
     id: int
     showing_id: int

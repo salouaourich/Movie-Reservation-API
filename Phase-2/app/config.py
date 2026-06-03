@@ -21,4 +21,12 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60")
 # Seat hold TTL (5 minutes per DECISIONS.md)
 HOLD_TTL_SECONDS = int(os.getenv("HOLD_TTL_SECONDS", "300"))
 
+# Payment: pending bookings expire after 15 minutes if not paid
+PAYMENT_EXPIRE_MINUTES = int(os.getenv("PAYMENT_EXPIRE_MINUTES", "15"))
+
+# Stripe
+STRIPE_SECRET_KEY      = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_PUBLISHABLE_KEY = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+STRIPE_WEBHOOK_SECRET  = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+
 API_PREFIX = "/api/v1"

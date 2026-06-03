@@ -103,9 +103,14 @@ class Booking(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     showing_id: Mapped[int] = mapped_column(ForeignKey("showings.id"), nullable=False, index=True)
-    status: Mapped[str] = mapped_column(String(20), default="confirmed", nullable=False)  # confirmed | cancelled
+    # pending_payment → confirmed (paid) | cancelled (expired or failed)
+    status: Mapped[str] = mapped_column(String(20), default="pending_payment", nullable=False)
     ticket_code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     total_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    # Stripe PaymentIntent id — set when booking is created, cleared on confirm/cancel
+    payment_intent_id: Mapped[str | None] = mapped_column(String(100), index=True)
+    # Booking expires (and seats are freed) if payment not completed by this time
+    payment_expires_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime)
 

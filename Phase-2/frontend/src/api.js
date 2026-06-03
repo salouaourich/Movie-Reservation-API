@@ -138,4 +138,7 @@ export const api = {
   myBookings:    ()   => request('/bookings/me', { auth: true }),
   cancelBooking: (id) => request(`/bookings/${id}`, { method: 'DELETE', auth: true }),
   getTicket:     (id) => request(`/bookings/${id}/ticket`, { auth: true }),
+
+  // ---- Payments ----
+  stripeConfig: () => request('/payments/config'),
 };
