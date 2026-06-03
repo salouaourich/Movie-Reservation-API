@@ -11,4 +11,3 @@ python-dotenv==1.0.1
 alembic==1.13.3
 python-multipart==0.0.12
 stripe==10.5.0
-apscheduler==3.10.4
