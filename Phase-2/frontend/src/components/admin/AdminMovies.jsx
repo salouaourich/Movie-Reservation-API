@@ -65,6 +65,40 @@ function fileToDataUrl(file) {
   });
 }
 
+// Resize + recompress the uploaded image down to a movie-poster-sized JPEG
+// (max 500×750, ~80 KB instead of 1 MB+) so the POST request travels fast
+// even on Render's free tier and well within Cloudflare's body limits.
+async function compressPoster(file) {
+  const dataUrl = await fileToDataUrl(file);
+
+  const img = await new Promise((resolve, reject) => {
+    const i = new Image();
+    i.onload  = () => resolve(i);
+    i.onerror = () => reject(new Error('Could not decode the image.'));
+    i.src = dataUrl;
+  });
+
+  // Target poster dimensions — keep the original aspect ratio.
+  const MAX_W = 500;
+  const MAX_H = 750;
+  let { width, height } = img;
+  const scale = Math.min(MAX_W / width, MAX_H / height, 1);
+  width  = Math.round(width  * scale);
+  height = Math.round(height * scale);
+
+  const canvas = document.createElement('canvas');
+  canvas.width  = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#000';                  // black background for transparent images
+  ctx.fillRect(0, 0, width, height);
+  ctx.drawImage(img, 0, 0, width, height);
+
+  // JPEG 0.82 is a sweet spot — visually indistinguishable, ~85 KB on a typical
+  // 500×750 poster (vs. ~1 MB+ raw upload).
+  return canvas.toDataURL('image/jpeg', 0.82);
+}
+
 const emptyForm = {
   title: '',
   description: '',
@@ -100,7 +134,9 @@ export default function AdminMovies() {
     }
     setUploading(true);
     try {
-      const dataUrl = await fileToDataUrl(file);
+      // Compress to a small JPEG so the POST body stays small (~85 KB) — large
+      // base64 uploads otherwise stall on Render's free tier.
+      const dataUrl = await compressPoster(file);
       setForm((f) => ({ ...f, poster_url: dataUrl }));
     } catch (err) {
       setError(err.message);

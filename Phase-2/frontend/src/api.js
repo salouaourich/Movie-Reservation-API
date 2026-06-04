@@ -40,9 +40,10 @@ export function logout() {
   setRole(null);
 }
 
-// Hard request timeout — if the backend hangs, fail fast (15 s) instead of
-// leaving the UI stuck on "Loading…" forever.
-const REQUEST_TIMEOUT_MS = 15_000;
+// Hard request timeout — Render free tier can take 30–50 s to cold-start
+// and movie posters travel as ~1.4 MB base64 payloads, so a generous
+// timeout avoids killing legitimate uploads.
+const REQUEST_TIMEOUT_MS = 60_000;
 
 async function request(path, { method = 'GET', body, auth = false } = {}) {
   const headers = { 'Content-Type': 'application/json' };
