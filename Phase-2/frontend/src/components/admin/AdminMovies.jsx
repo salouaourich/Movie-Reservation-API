@@ -50,9 +50,8 @@ function generatePoster(title) {
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
-// Max upload size — 1 MB raw. Base64 inflates this by ~33% in the request body.
-const MAX_POSTER_BYTES = 1 * 1024 * 1024;
-const ALLOWED_POSTER_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+// No size or type limit — the image is downscaled + recompressed client-side
+// to a ~85 KB JPEG before upload, so any source file is safe.
 
 // Read a File from the upload <input> and return a base64 data URL string
 // that can be stored in the existing poster_url field (no new endpoint needed).
@@ -122,16 +121,7 @@ export default function AdminMovies() {
     const file = e.target.files?.[0];
     if (!file) return;
     setError('');
-    if (!ALLOWED_POSTER_TYPES.includes(file.type)) {
-      setError('Poster must be a JPG, PNG, WEBP, or GIF image.');
-      e.target.value = '';
-      return;
-    }
-    if (file.size > MAX_POSTER_BYTES) {
-      setError(`Image is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). Max 1 MB.`);
-      e.target.value = '';
-      return;
-    }
+    // No size or type validation — compressPoster() handles arbitrary input.
     setUploading(true);
     try {
       // Compress to a small JPEG so the POST body stays small (~85 KB) — large
@@ -278,7 +268,7 @@ export default function AdminMovies() {
                 {/* Inputs */}
                 <div style={{ flex: 1 }}>
                   <p className="muted" style={{ fontSize: 12, margin: '0 0 6px' }}>
-                    Upload an image from your computer (JPG, PNG, WEBP, GIF — max 1 MB):
+                    Upload an image from your computer:
                   </p>
                   <input
                     ref={fileInputRef}
