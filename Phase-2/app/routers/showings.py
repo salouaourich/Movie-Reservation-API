@@ -9,14 +9,16 @@ DELETE /showings/{id}/holds        customer: release seat holds
 """
 
 from datetime import timedelta
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy import select, func, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import RATE_LIMIT_HOLD
 from app.database import get_db
 from app.errors import APIError
 from app.models import Showing, Hall, Seat, Booking, BookingSeat, Movie
+from app.rate_limit import limiter
 from app.schemas import (
     ShowingCreate,
     ShowingPublic,
@@ -152,7 +154,9 @@ async def get_seat_map(showing_id: int, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/{showing_id}/holds", response_model=HoldResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit(RATE_LIMIT_HOLD)
 async def create_holds(
+    request: Request,
     showing_id: int,
     payload: HoldRequest,
     db: AsyncSession = Depends(get_db),

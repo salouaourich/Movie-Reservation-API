@@ -8,6 +8,8 @@ A full-stack cinema seat reservation backend built with **FastAPI**, **PostgreSQ
 > | 🌐 Frontend | https://cinema-frontend-11qu.onrender.com |
 > | ⚡ API | https://cinema-api-5mey.onrender.com |
 > | 📖 API Docs (Swagger) | https://cinema-api-5mey.onrender.com/docs |
+> | 📖 GITHUB repository | https://github.com/salouaourich/Movie-Reservation-API
+
 
 ---
 

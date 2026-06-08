@@ -1,26 +1,104 @@
 """
-Pydantic schemas that match the Phase-1 API contract exactly.
-Request shapes, response shapes, and error shapes all live here.
+Pydantic schemas for the Movie Reservation API (Phase 3 - Security).
+
+Phase-3 hardening over Phase-2:
+  - Strict mode + extra="forbid" on every inbound request body
+  - Length / regex / numeric bounds on every free field
+  - Enums for fixed-vocabulary fields (role, seat_type, status, rating, tier)
+  - Strong password policy (length + upper + lower + digit)
+  - Future-dated start_time on showings
+  - Non-empty, de-duplicated, size-capped seat_ids on holds & bookings
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
+from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import (
+    BaseModel,
+    EmailStr,
+    Field,
+    ConfigDict,
+    field_validator,
+)
+
+
+# ---------- Enums ----------
+
+class UserRole(str, Enum):
+    customer = "customer"
+    admin = "admin"
+
+
+class SeatType(str, Enum):
+    standard = "standard"
+    vip = "vip"
+
+
+class SeatStatus(str, Enum):
+    available = "available"
+    held = "held"
+    booked = "booked"
+
+
+class ShowingStatus(str, Enum):
+    scheduled = "scheduled"
+    cancelled = "cancelled"
+    completed = "completed"
+
+
+class BookingStatus(str, Enum):
+    confirmed = "confirmed"
+    cancelled = "cancelled"
+
+
+class PricingTier(str, Enum):
+    low = "low"
+    mid = "mid"
+    high = "high"
+
+
+class MovieRating(str, Enum):
+    G = "G"
+    PG = "PG"
+    PG13 = "PG-13"
+    R = "R"
+    NC17 = "NC-17"
+
+
+# ---------- Base ----------
+
+class StrictModel(BaseModel):
+    """Inbound bodies: no unknown fields, trim whitespace."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+
+MAX_SEATS_PER_REQUEST = 10  # anti-DoS cap
 
 
 # ---------- Auth ----------
 
-class RegisterRequest(BaseModel):
+class RegisterRequest(StrictModel):
     email: EmailStr
-    password: str = Field(min_length=8)
+    password: str = Field(min_length=8, max_length=128)
     full_name: str = Field(min_length=1, max_length=255)
 
+    @field_validator("password")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
+        if not any(c.islower() for c in v):
+            raise ValueError("Password must contain at least one lowercase letter.")
+        if not any(c.isupper() for c in v):
+            raise ValueError("Password must contain at least one uppercase letter.")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Password must contain at least one digit.")
+        return v
 
-class LoginRequest(BaseModel):
+
+class LoginRequest(StrictModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=1, max_length=128)
 
 
 class TokenResponse(BaseModel):
@@ -34,38 +112,44 @@ class UserPublic(BaseModel):
     id: int
     email: EmailStr
     full_name: str
-    role: str
+    role: UserRole
     created_at: Optional[datetime] = None
 
 
 # ---------- Movies ----------
 
-class MovieBase(BaseModel):
+class MovieBase(StrictModel):
     title: str = Field(min_length=1, max_length=255)
-    description: Optional[str] = None
-    duration_minutes: int = Field(gt=0)
-    genre: Optional[str] = None
-    rating: Optional[str] = None
-    poster_url: Optional[str] = None
+    description: Optional[str] = Field(default=None, max_length=4000)
+    duration_minutes: int = Field(gt=0, le=600)
+    genre: Optional[str] = Field(default=None, max_length=50)
+    rating: Optional[MovieRating] = None
+    poster_url: Optional[str] = Field(default=None, max_length=500, pattern=r"^https?://.+")
 
 
 class MovieCreate(MovieBase):
     pass
 
 
-class MovieUpdate(BaseModel):
-    title: Optional[str] = None
-    description: Optional[str] = None
-    duration_minutes: Optional[int] = None
-    genre: Optional[str] = None
-    rating: Optional[str] = None
-    poster_url: Optional[str] = None
+class MovieUpdate(StrictModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    description: Optional[str] = Field(default=None, max_length=4000)
+    duration_minutes: Optional[int] = Field(default=None, gt=0, le=600)
+    genre: Optional[str] = Field(default=None, max_length=50)
+    rating: Optional[MovieRating] = None
+    poster_url: Optional[str] = Field(default=None, max_length=500, pattern=r"^https?://.+")
     is_active: Optional[bool] = None
 
 
-class MoviePublic(MovieBase):
+class MoviePublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
+    title: str
+    description: Optional[str] = None
+    duration_minutes: int
+    genre: Optional[str] = None
+    rating: Optional[str] = None
+    poster_url: Optional[str] = None
     is_active: bool
 
 
@@ -78,17 +162,17 @@ class MovieList(BaseModel):
 
 # ---------- Halls ----------
 
-class SeatCreate(BaseModel):
-    row_label: str
-    seat_number: int
-    seat_type: str = "standard"
+class SeatCreate(StrictModel):
+    row_label: str = Field(min_length=1, max_length=3, pattern=r"^[A-Z]{1,3}$")
+    seat_number: int = Field(gt=0, le=999)
+    seat_type: SeatType = SeatType.standard
 
 
-class HallCreate(BaseModel):
-    name: str
-    rows_count: int = Field(gt=0)
-    cols_count: int = Field(gt=0)
-    seats: Optional[list[SeatCreate]] = None
+class HallCreate(StrictModel):
+    name: str = Field(min_length=1, max_length=100)
+    rows_count: int = Field(gt=0, le=50)
+    cols_count: int = Field(gt=0, le=50)
+    seats: Optional[list[SeatCreate]] = Field(default=None, max_length=2500)
 
 
 class SeatPublic(BaseModel):
@@ -96,7 +180,7 @@ class SeatPublic(BaseModel):
     id: int
     row_label: str
     seat_number: int
-    seat_type: str
+    seat_type: SeatType
 
 
 class HallPublic(BaseModel):
@@ -110,11 +194,26 @@ class HallPublic(BaseModel):
 
 # ---------- Showings ----------
 
-class ShowingCreate(BaseModel):
-    movie_id: int
-    hall_id: int
+class ShowingCreate(StrictModel):
+    movie_id: int = Field(gt=0)
+    hall_id: int = Field(gt=0)
     start_time: datetime
-    base_price: Decimal
+    base_price: Decimal = Field(gt=Decimal("0"), le=Decimal("9999.99"))
+
+    @field_validator("start_time")
+    @classmethod
+    def must_be_future(cls, v: datetime) -> datetime:
+        now = datetime.now(timezone.utc) if v.tzinfo else datetime.utcnow()
+        if v <= now:
+            raise ValueError("start_time must be in the future.")
+        return v
+
+    @field_validator("base_price")
+    @classmethod
+    def two_decimals(cls, v: Decimal) -> Decimal:
+        if v.as_tuple().exponent < -2:
+            raise ValueError("base_price must have at most 2 decimal places.")
+        return v
 
 
 class ShowingPublic(BaseModel):
@@ -124,7 +223,7 @@ class ShowingPublic(BaseModel):
     hall_id: int
     start_time: datetime
     base_price: Decimal
-    status: str
+    status: ShowingStatus
 
 
 class ShowingListItem(BaseModel):
@@ -137,21 +236,21 @@ class ShowingListItem(BaseModel):
     occupancy_rate: float
     seats_total: int
     seats_available: int
-    status: str
+    status: ShowingStatus
 
 
 class ShowingListResponse(BaseModel):
     items: list[ShowingListItem]
 
 
-# ---------- Seat map (the dynamic pricing endpoint) ----------
+# ---------- Seat map ----------
 
 class SeatMapSeat(BaseModel):
     id: int
     row_label: str
     seat_number: int
-    seat_type: str
-    status: str  # available | held | booked
+    seat_type: SeatType
+    status: SeatStatus
     price: Decimal
 
 
@@ -166,16 +265,33 @@ class SeatMapResponse(BaseModel):
     showing_id: int
     base_price: Decimal
     occupancy_rate: float
-    pricing_tier: str   # low | mid | high
+    pricing_tier: PricingTier
     tier_multiplier: float
     hall: SeatMapHall
     seats: list[SeatMapSeat]
 
 
-# ---------- Holds ----------
+# ---------- Holds / Bookings helpers ----------
 
-class HoldRequest(BaseModel):
+def _validate_seat_ids(v: list[int]) -> list[int]:
+    if not v:
+        raise ValueError("seat_ids must contain at least one seat.")
+    if len(v) > MAX_SEATS_PER_REQUEST:
+        raise ValueError(f"Cannot request more than {MAX_SEATS_PER_REQUEST} seats at once.")
+    if any(sid <= 0 for sid in v):
+        raise ValueError("seat_ids must be positive integers.")
+    if len(set(v)) != len(v):
+        raise ValueError("seat_ids contains duplicates.")
+    return v
+
+
+class HoldRequest(StrictModel):
     seat_ids: list[int]
+
+    @field_validator("seat_ids")
+    @classmethod
+    def _v(cls, v):
+        return _validate_seat_ids(v)
 
 
 class HoldResponse(BaseModel):
@@ -185,15 +301,27 @@ class HoldResponse(BaseModel):
     ttl_seconds: int
 
 
-class HoldReleaseRequest(BaseModel):
+class HoldReleaseRequest(StrictModel):
     seat_ids: Optional[list[int]] = None
+
+    @field_validator("seat_ids")
+    @classmethod
+    def _v(cls, v):
+        if v is None:
+            return v
+        return _validate_seat_ids(v)
 
 
 # ---------- Bookings ----------
 
-class BookingCreate(BaseModel):
-    showing_id: int
+class BookingCreate(StrictModel):
+    showing_id: int = Field(gt=0)
     seat_ids: list[int]
+
+    @field_validator("seat_ids")
+    @classmethod
+    def _v(cls, v):
+        return _validate_seat_ids(v)
 
 
 class BookingSeatPublic(BaseModel):
@@ -207,24 +335,10 @@ class BookingPublic(BaseModel):
     id: int
     showing_id: int
     user_id: int
-    status: str
+    status: BookingStatus
     ticket_code: str
     total_price: Decimal
     created_at: datetime
-    seats: list[BookingSeatPublic]
-
-
-class BookingPendingResponse(BaseModel):
-    """Returned immediately after POST /bookings — payment still required."""
-    id: int
-    showing_id: int
-    user_id: int
-    status: str          # always "pending_payment"
-    ticket_code: str
-    total_price: Decimal
-    created_at: datetime
-    payment_expires_at: datetime
-    client_secret: str   # Stripe PaymentIntent client secret — pass to Stripe.js
     seats: list[BookingSeatPublic]
 
 
@@ -234,7 +348,7 @@ class BookingListItem(BaseModel):
     movie_title: str
     hall_name: str
     start_time: datetime
-    status: str
+    status: BookingStatus
     total_price: Decimal
     ticket_code: str
     created_at: datetime
@@ -246,7 +360,7 @@ class BookingList(BaseModel):
 
 class BookingCancelResponse(BaseModel):
     id: int
-    status: str
+    status: BookingStatus
     cancelled_at: datetime
 
 
@@ -266,7 +380,7 @@ class TicketShowing(BaseModel):
 class TicketSeat(BaseModel):
     row_label: str
     seat_number: int
-    seat_type: str
+    seat_type: SeatType
 
 
 class TicketResponse(BaseModel):

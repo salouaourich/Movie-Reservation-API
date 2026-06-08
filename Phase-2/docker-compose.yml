@@ -31,6 +31,10 @@ services:
       SECRET_KEY: changeme
       ACCESS_TOKEN_EXPIRE_MINUTES: "60"
       HOLD_TTL_SECONDS: "300"
+      # Stripe (read from your local .env file, never commit real keys)
+      STRIPE_SECRET_KEY:      ${STRIPE_SECRET_KEY:-}
+      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY:-}
+      STRIPE_WEBHOOK_SECRET:  ${STRIPE_WEBHOOK_SECRET:-}
     volumes:
       - .:/app
     ports:
